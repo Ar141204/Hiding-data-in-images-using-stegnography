@@ -1,86 +1,88 @@
-import argparse
 from PIL import Image
+import binascii
+import optparse
 
-class Steganography:
-    BLACK_PIXEL = (0, 0, 0)
+def rgb2hex(r, g, b):
+    return '{:02x}{:02x}{:02x}'.format(r, g, b)
 
-    def _int_to_bin(self, rgb):
-        r, g, b = rgb
-        return f'{r:08b}', f'{g:08b}', f'{b:08b}'
+def hex2rgb(hex):
+    return tuple(int(hex[i:i+2], 16) for i in range(0, 6, 2))
 
-    def _bin_to_int(self, rgb):
-        r, g, b = rgb
-        return int(r, 2), int(g, 2), int(b, 2)
+def str2bin(message):
+    binary = bin(int(binascii.hexlify(message.encode()), 16))
+    return binary[2:]
 
-    def _merge_rgb(self, rgb1, rgb2):
-        r1, g1, b1 = self._int_to_bin(rgb1)
-        r2, g2, b2 = self._int_to_bin(rgb2)
-        rgb = r1[:4] + r2[:4], g1[:4] + g2[:4], b1[:4] + b2[:4]
-        return self._bin_to_int(rgb)
+def bin2str(binary):
+    message = binascii.unhexlify('%x' % (int('0b' + binary, 2)))
+    return message.decode()
 
-    def _unmerge_rgb(self, rgb):
-        r, g, b = self._int_to_bin(rgb)
-        new_rgb = r[4:] + '0000', g[4:] + '0000', b[4:] + '0000'
-        return self._bin_to_int(new_rgb)
+def encode(hex, digit):
+    if hex[-1] in '0123456789abcdef':
+        hex = hex[:-1] + digit
+        return hex
+    else:
+        return None
 
-    def merge(self, image1, image2):
-        if image2.size[0] > image1.size[0] or image2.size[1] > image1.size[1]:
-            raise ValueError('Image 2 should be smaller than Image 1!')
+def decode(hex):
+    if hex[-1] in '0123456789abcdef':
+        return hex[-1]
+    else:
+        return None
 
-        map1 = image1.load()
-        map2 = image2.load()
-
-        new_image = Image.new(image1.mode, image1.size)
-        new_map = new_image.load()
-
-        for i in range(image1.size[0]):
-            for j in range(image1.size[1]):
-                if i < image2.size[0] and j < image2.size[1]:
-                    rgb2 = map2[i, j]
+def hide_data(image_path, message, output_path):
+    image = Image.open(image_path)
+    binary_message = str2bin(message) + '1111111111111110'
+    if image.mode in 'RGBA':
+        image = image.convert('RGBA')
+        data = image.getdata()
+        new_data = []
+        digit = 0
+        temp = ''
+        for item in data:
+            if digit < len(binary_message):
+                newpix = encode(rgb2hex(item[0], item[1], item[2]), binary_message[digit])
+                if newpix:
+                    r, g, b = hex2rgb(newpix)
+                    new_data.append((r, g, b, 255))
+                    digit += 1
                 else:
-                    rgb2 = self.BLACK_PIXEL
-                rgb1 = map1[i, j]
-                new_map[i, j] = self._merge_rgb(rgb1, rgb2)
+                    new_data.append(item)
+            else:
+                new_data.append(item)
+        image.putdata(new_data)
+        image.save(output_path, "PNG")
+        return "Message encoded successfully!"
+    return "Incorrect Image Mode, Couldn't Hide"
 
-        return new_image
-
-    def unmerge(self, image):
-        pixel_map = image.load()
-
-        new_image = Image.new(image.mode, image.size)
-        new_map = new_image.load()
-
-        for i in range(image.size[0]):
-            for j in range(image.size[1]):
-                new_map[i, j] = self._unmerge_rgb(pixel_map[i, j])
-
-        return new_image
+def retr_data(image_path):
+    image = Image.open(image_path)
+    binary = ''
+    if image.mode in 'RGBA':
+        image = image.convert('RGBA')
+        data = image.getdata()
+        for item in data:
+            digit = decode(rgb2hex(item[0], item[1], item[2]))
+            if digit:
+                binary = binary + digit
+                if binary[-16:] == '1111111111111110':
+                    return bin2str(binary[:-16])
+        return bin2str(binary)
+    return "Incorrect Image Mode, Couldn't Retrieve"
 
 def main():
-    parser = argparse.ArgumentParser(description='Steganography')
-    subparser = parser.add_subparsers(dest='command')
-
-    merge = subparser.add_parser('merge')
-    merge.add_argument('--image1', required=True, help='Image1 path')
-    merge.add_argument('--image2', required=True, help='Image2 path')
-    merge.add_argument('--output', required=True, help='Output path')
-
-    unmerge = subparser.add_parser('unmerge')
-    unmerge.add_argument('--image', required=True, help='Image path')
-    unmerge.add_argument('--output', required=True, help='Output path')
-
-    args = parser.parse_args()
-
-    try:
-        if args.command == 'merge':
-            image1 = Image.open(args.image1)
-            image2 = Image.open(args.image2)
-            Steganography().merge(image1, image2).save(args.output)
-        elif args.command == 'unmerge':
-            image = Image.open(args.image)
-            Steganography().unmerge(image).save(args.output)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    parser = optparse.OptionParser('usage %prog ' + '-e/-d <target file>')
+    parser.add_option('-e', dest='hide', type='string', help='target picture path to hide text')
+    parser.add_option('-d', dest='retr', type='string', help='target picture path to retrieve text')
+    parser.add_option('-m', dest='message', type='string', help='message to hide')
+    parser.add_option('-o', dest='output', type='string', help='output picture path')
+    (options, args) = parser.parse_args()
+    if options.hide and options.message and options.output:
+        print(hide_data(options.hide, options.message, options.output))
+    elif options.retr:
+        print(retr_data(options.retr))
+    else:
+        print(parser.usage)
+        exit(0)
 
 if __name__ == '__main__':
     main()
